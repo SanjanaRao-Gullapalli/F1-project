@@ -1,0 +1,125 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC #Transform Sprints Data
+# MAGIC 1. Read bronze `sprints` table
+# MAGIC 2. Keep only the columns required for analytics(Drop `url` column)
+# MAGIC 3. Standardise column names using snake_case (`constructorId` &rarr; `constructor_id`,`driverId` &rarr; `driver_id`, `raceName` &rarr; `race_name`, `positionText` &rarr; `finish_position_text`)
+# MAGIC 4. Rename columns to make them more meaningful(`date` &rarr; `race_date`,`grid` &rarr; `grid_position`, `laps` &rarr; 'completed_laps`, `number` &rarr; `car_number`, `position` &rarr; `finish_position`) 
+# MAGIC 5. Filter out rows where `season`, `round`, `constructor_id` or `driver_id` is null(business key validation)
+# MAGIC 6. Remove duplicate record
+# MAGIC 7. Transform values of column `race_name` to Title Case
+# MAGIC 8. Write the transformed data to silver `sprints` table
+
+# COMMAND ----------
+
+# MAGIC %run ../00-common/01.environment-config
+
+# COMMAND ----------
+
+bronze_table=f"{catalog_name}.{bronze_schema}.sprints"
+silver_table=f"{catalog_name}.{silver_schema}.sprints"
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **STEP 1 to 4 Read Source Data, Select required columns & Standardise column names**
+
+# COMMAND ----------
+
+sprints_df=(
+    spark.table(bronze_table)
+        .select("season",
+                "round",
+                "constructorId",
+                "driverId",
+                "date",
+                "raceName",
+                "grid",
+                "laps",
+                "number",
+                "points",
+                "position",
+                "positionText",
+                "status",
+                "ingestion_timestamp",
+                "source_file")
+        .withColumnsRenamed({
+            "constructorId":"constructor_id",
+            "driverId":"driver_id",
+            "raceName":"race_name",
+            "date": "race_date",
+            "grid":"grid_position",
+            "laps":"completed_laps",
+            "number":"car_number",
+            "position":"final_position",
+            "positionText":"final_position_text"
+        })
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **STEP 5 & 6 Data Quality Checks**
+# MAGIC
+# MAGIC - Filter out rows where `season`,`round`, `constructor_id` or `driver_id` is null(business key validation)
+# MAGIC
+# MAGIC - 
+# MAGIC Remove duplicate records
+
+# COMMAND ----------
+
+sprints_valid_df=(
+    sprints_df
+        .filter(
+            F.col("season").isNotNull() &
+            F.col("round").isNotNull() &
+            F.col("constructor_id").isNotNull() &
+            F.col("driver_id").isNotNull())
+        .dropDuplicates(["Season","round","constructor_id","driver_id"])
+)
+
+# COMMAND ----------
+
+display(sprints_df.count()-sprints_valid_df.count())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **STEP 7 - Transform value of column `nationality` to Title Case**
+
+# COMMAND ----------
+
+sprints_final_df=(
+    sprints_valid_df
+    .withColumn("race_name",F.initcap(F.col("race_name")))
+)
+
+# COMMAND ----------
+
+display(sprints_final_df)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **STEP 8 - Write the transformed data to silver `sprints` table**
+
+# COMMAND ----------
+
+(
+    sprints_final_df
+    .write
+    .format('delta')
+    .mode('overwrite')
+    .saveAsTable(silver_table)
+)
+
+# COMMAND ----------
+
+display(spark.table(silver_table))
+
+# COMMAND ----------
+
